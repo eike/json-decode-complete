@@ -1,6 +1,6 @@
 {
     "type": "package",
-    "name": "eike/json-decode-object",
+    "name": "eike/json-decode-complete",
     "license": "Apache-2.0",
     "version": "1.0.0",
     "summary": "Decode JSON objects making sure that all fields are handled by your Elm code.",
