@@ -36,25 +36,25 @@ The general usage is as follows: Start decoding the object with `object f`, wher
 -}
 
 import Dict exposing (Dict)
+import Set exposing (Set)
 import Json.Decode as D exposing (Decoder)
-import Json.Encode as E
 
 
 {-| A decoder for JSON objects that makes sure that all fields in the JSON are handled
 -}
 type ObjectDecoder a
-    = OD (Decoder ( Dict String D.Value, a ))
+    = OD (Decoder ( Set String, a ))
 
 
 {-| Start decoding a JSON object.
 -}
 object : a -> ObjectDecoder a
 object a =
-    OD (D.map2 Tuple.pair (D.dict D.value) (D.succeed a))
+    OD (D.map2 Tuple.pair (D.dict (D.succeed ()) |> D.map (\dict -> Dict.keys dict |> Set.fromList)) (D.succeed a))
 
 
-toOD : (( Dict String D.Value, a ) -> Decoder ( Dict String D.Value, b )) -> ObjectDecoder a -> ObjectDecoder b
-toOD handler (OD objectDecoder) =
+lift : (( Set String, a ) -> Decoder ( Set String, b )) -> ObjectDecoder a -> ObjectDecoder b
+lift handler (OD objectDecoder) =
     OD (objectDecoder |> D.andThen handler)
 
 
@@ -62,19 +62,10 @@ toOD handler (OD objectDecoder) =
 -}
 required : String -> Decoder a -> ObjectDecoder (a -> b) -> ObjectDecoder b
 required field decoder =
-    toOD
-        (\( dict, f ) ->
-            case Dict.get field dict of
-                Just value ->
-                    case D.decodeValue decoder value of
-                        Ok a ->
-                            D.succeed ( Dict.remove field dict, f a )
-
-                        Err err ->
-                            D.fail (D.errorToString err)
-
-                Nothing ->
-                    D.fail ("missing required field `" ++ field ++ "`")
+    lift
+        (\( unhandled, f ) ->
+            D.field field decoder
+                |> D.map (\result -> ( Set.remove field unhandled, f result ))
         )
 
 
@@ -82,19 +73,11 @@ required field decoder =
 -}
 optional : String -> Decoder a -> a -> ObjectDecoder (a -> b) -> ObjectDecoder b
 optional field decoder default =
-    toOD
-        (\( dict, f ) ->
-            case Dict.get field dict of
-                Just value ->
-                    case D.decodeValue decoder value of
-                        Ok a ->
-                            D.succeed ( Dict.remove field dict, f a )
-
-                        Err err ->
-                            D.fail (D.errorToString err)
-
-                Nothing ->
-                    D.succeed ( dict, f default )
+    lift
+        (\( unhandled, f ) ->
+            D.maybe (D.field field decoder)
+                |> D.map (Maybe.withDefault default)
+                |> D.map (\result -> ( Set.remove field unhandled, f result ))
         )
 
 
@@ -102,12 +85,12 @@ optional field decoder default =
 -}
 discard : String -> ObjectDecoder a -> ObjectDecoder a
 discard field =
-    toOD
-        (\( dict, a ) ->
-            if Dict.member field dict then
-                D.succeed ( Dict.remove field dict, a )
+    lift
+        (\( unhandled, a ) ->
+            if Set.member field unhandled then
+                D.succeed ( Set.remove field unhandled, a )
             else
-                D.fail ("missing required discarded field `" ++ field ++ "`")
+                D.fail ("Missing required discarded field `" ++ field ++ "`")
         )
 
 
@@ -115,21 +98,21 @@ discard field =
 -}
 discardOptional : String -> ObjectDecoder a -> ObjectDecoder a
 discardOptional field =
-    toOD (\( dict, a ) -> D.succeed ( Dict.remove field dict, a ))
+    lift (\( unhandled, a ) -> D.succeed ( Set.remove field unhandled, a ))
 
 
 {-| Don’t look at the JSON, simply use the given value.
 -}
 hardcoded : a -> ObjectDecoder (a -> b) -> ObjectDecoder b
 hardcoded a =
-    toOD (\( dict, f ) -> D.succeed ( dict, f a ))
+    lift (\( unhandled, f ) -> D.succeed ( unhandled, f a ))
 
 
 {-| Finish up the `ObjectDecoder`, turning it into a regular decoder. Pass a dictionary of the unhandled fields (as `Decode.Value` values).
 -}
 restValues : ObjectDecoder (Dict String D.Value -> b) -> Decoder b
-restValues (OD objectDecoder) =
-    (objectDecoder |> D.andThen (\( dict, f ) -> D.succeed (f dict)))
+restValues =
+    rest D.value
 
 
 {-| Decode the remaining fields uniformly with the given `Decoder`, pass the dictionary of the results and close the `ObjectDecoder` turning it into a regular `Decoder`.
@@ -138,18 +121,13 @@ rest : Decoder a -> ObjectDecoder (Dict String a -> b) -> Decoder b
 rest aDecoder (OD objectDecoder) =
     (objectDecoder
         |> D.andThen
-            (\( dict, f ) ->
-                Dict.foldl
-                    (\field value acc ->
-                        case D.decodeValue aDecoder value of
-                            Ok a ->
-                                acc |> D.andThen (\newDict -> D.succeed (Dict.insert field a newDict))
-
-                            Err err ->
-                                D.fail (D.errorToString err)
+            (\( unhandled, f ) ->
+                Set.foldl
+                    (\field acc ->
+                        D.map2 (Dict.insert field) (D.field field aDecoder) acc
                     )
                     (D.succeed Dict.empty)
-                    dict
+                    unhandled
                     |> D.map f
             )
     )
@@ -185,16 +163,12 @@ first decodes the `version` field. If it is `0`, the JSON needs to have (exactly
 -}
 andThen : (a -> ObjectDecoder b) -> ObjectDecoder a -> ObjectDecoder b
 andThen cont =
-    toOD
-        (\( dict, a ) ->
+    lift
+        (\( unhandled, a ) ->
             case cont a of
-                OD subDecoder ->
-                    case D.decodeValue subDecoder (E.dict identity identity dict) of
-                        Ok result ->
-                            D.succeed result
-
-                        Err err ->
-                            D.fail (D.errorToString err)
+                OD nextDecoder ->
+                    nextDecoder
+                        |> D.map (\( subUnhandled, result ) -> ( Set.intersect unhandled subUnhandled, result ))
         )
 
 
@@ -213,11 +187,11 @@ complete : ObjectDecoder a -> Decoder a
 complete (OD objectDecoder) =
     objectDecoder
         |> D.andThen
-            (\( dict, a ) ->
-                if Dict.isEmpty dict then
+            (\( unhandled, a ) ->
+                if Set.isEmpty unhandled then
                     D.succeed a
                 else
-                    D.fail ("The following fields where not handled: " ++ String.join ", " (Dict.keys dict))
+                    D.fail ("The following fields where not handled: " ++ String.join ", " (Set.toList unhandled))
             )
 
 
