@@ -69,7 +69,7 @@ required field decoder =
         )
 
 
-{-| Decode the field given by the `String` parameter using the given (regular) `Decoder`. If the field is missing, use the provided default value instead. However, if the `Decoder` fails, this `ObjectDecoder` fails as well.
+{-| Decode the field given by the `String` parameter using the given (regular) `Decoder`. If the field is missing or the decoder fails, use the provided default value instead.
 -}
 optional : String -> Decoder a -> a -> ObjectDecoder (a -> b) -> ObjectDecoder b
 optional field decoder default =
