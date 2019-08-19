@@ -1,6 +1,6 @@
 This package allows you to write decoders for JSON objects that make sure that you handled all fields of the incoming JSON. For example,
 
-    import Json.Decode exposing (Decoder)
+    import Json.Decode as D exposing (Decoder)
     import DecodeComplete exposing (..)
 
     type alias User =
@@ -11,8 +11,8 @@ This package allows you to write decoders for JSON objects that make sure that y
     userDecoder : Decoder User
     userDecoder =
         object User
-            |> require "name" Decode.string
-            |> require "age" Decode.int
+            |> require "name" D.string
+            |> require "age" D.int
             |> discard "email"
             |> complete
 

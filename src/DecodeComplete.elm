@@ -2,7 +2,7 @@ module DecodeComplete exposing (ObjectDecoder, object, complete, required, optio
 
 {-| This module provides a way to decode JSON objects while making sure that all fields are handled. The interface works similar to json-decode-pipeline. For example,
 
-    import Json.Decode exposing (Decoder)
+    import Json.Decode as D exposing (Decoder)
     import DecodeComplete exposing (..)
 
     type alias User =
@@ -13,8 +13,8 @@ module DecodeComplete exposing (ObjectDecoder, object, complete, required, optio
     userDecoder : Decoder User
     userDecoder =
         object User
-            |> require "name" Decode.string
-            |> require "age" Decode.int
+            |> required "name" D.string
+            |> required "age" D.int
             |> discard "email"
             |> complete
 
