@@ -108,11 +108,27 @@ hardcoded a =
     lift (\( unhandled, f ) -> D.succeed ( unhandled, f a ))
 
 
-{-| Finish up the `ObjectDecoder`, turning it into a regular decoder. Pass a dictionary of the unhandled fields (as `Decode.Value` values).
+{-| Close the `ObjectDecoder`, turning it into a regular `Decoder`. If unhandled fields in the JSON remain, this decoder will fail.
 -}
-restValues : ObjectDecoder (Dict String D.Value -> b) -> Decoder b
-restValues =
-    rest D.value
+complete : ObjectDecoder a -> Decoder a
+complete (OD objectDecoder) =
+    objectDecoder
+        |> D.andThen
+            (\( unhandled, a ) ->
+                if Set.isEmpty unhandled then
+                    D.succeed a
+                else
+                    D.fail ("The following fields where not handled: " ++ String.join ", " (Set.toList unhandled))
+            )
+
+
+{-| Turn the `ObjectDecoder` into a regular `Decoder`. Ignore if fields remain unhandled.
+
+This might be useful if you only want the check that all fields are handled to occur during development. You can use `complete` in development and change it into `discardRest` without having to change anything else.
+-}
+discardRest : ObjectDecoder a -> Decoder a
+discardRest (OD objectDecoder) =
+    objectDecoder |> D.map Tuple.second
 
 
 {-| Decode the remaining fields uniformly with the given `Decoder`, pass the dictionary of the results and close the `ObjectDecoder` turning it into a regular `Decoder`.
@@ -131,6 +147,13 @@ rest aDecoder (OD objectDecoder) =
                     |> D.map f
             )
     )
+
+
+{-| Finish up the `ObjectDecoder`, turning it into a regular decoder. Pass a dictionary of the unhandled fields (as `Decode.Value` values).
+-}
+restValues : ObjectDecoder (Dict String D.Value -> b) -> Decoder b
+restValues =
+    rest D.value
 
 
 {-| Decide how to proceed based on earlier fields. This can be useful if the JSON represents a sum type or has different versions. For example
@@ -170,29 +193,6 @@ andThen cont =
                     nextDecoder
                         |> D.map (\( subUnhandled, result ) -> ( Set.intersect unhandled subUnhandled, result ))
         )
-
-
-{-| Turn the `ObjectDecoder` into a regular `Decoder`. Ignore if fields remain unhandled.
-
-This might be useful if you only want the check that all fields are handled to occur during development. You can use `complete` in development and change it into `discardRest` without having to change anything else.
--}
-discardRest : ObjectDecoder a -> Decoder a
-discardRest (OD objectDecoder) =
-    objectDecoder |> D.map Tuple.second
-
-
-{-| Close the `ObjectDecoder`, turning it into a regular `Decoder`. If unhandled fields in the JSON remain, this decoder will fail.
--}
-complete : ObjectDecoder a -> Decoder a
-complete (OD objectDecoder) =
-    objectDecoder
-        |> D.andThen
-            (\( unhandled, a ) ->
-                if Set.isEmpty unhandled then
-                    D.succeed a
-                else
-                    D.fail ("The following fields where not handled: " ++ String.join ", " (Set.toList unhandled))
-            )
 
 
 {-| An `ObjectDecoder` that always fails. Can be useful in combination with `andThen`.
