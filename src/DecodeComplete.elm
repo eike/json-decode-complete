@@ -1,9 +1,14 @@
-module DecodeComplete exposing (ObjectDecoder, object, complete, required, optional, discard, discardOptional, hardcoded, discardRest, rest, restValues, andThen, fail)
+module DecodeComplete exposing
+    ( ObjectDecoder, object
+    , required, optional, omissible, discard, discardOptional, hardcoded
+    , complete, discardRest, rest, restValues
+    , andThen, fail
+    )
 
 {-| This module provides a way to decode JSON objects while making sure that all fields are handled. The interface works similar to json-decode-pipeline. For example,
 
-    import Json.Decode as D exposing (Decoder)
     import DecodeComplete exposing (..)
+    import Json.Decode as D exposing (Decoder)
 
     type alias User =
         { name : String
@@ -20,24 +25,33 @@ module DecodeComplete exposing (ObjectDecoder, object, complete, required, optio
 
 decodes JSON objects that have precisely the fields `name`, `age`, and `email` and turns it into a `User` record, discarding the email address.
 
-The general usage is as follows: Start decoding the object with `object f`, where `f` is the function being called with the results. Then decode the individual fields with `require`, `discard`, `optional`, `discardOptional`. At the end, turn turn the `ObjectDecoder` into a normal `Decoder` by calling `complete` (or `discardRest` or `rest` or `restValues`).
+The general usage is as follows: Start decoding the object with `object f`, where `f` is the function being called with the results. Then decode the individual fields with `require`, `discard`, `optional`, `omissible`, `discardOptional`. At the end, turn turn the `ObjectDecoder` into a normal `Decoder` by calling `complete` (or `discardRest` or `rest` or `restValues`).
+
 
 # Starting to decode
+
 @docs ObjectDecoder, object
 
+
 # Decoding fields
-@docs required, optional, discard, discardOptional, hardcoded
+
+@docs required, optional, omissible, discard, discardOptional, hardcoded
+
 
 # Finish decoding
+
 @docs complete, discardRest, rest, restValues
 
+
 # Special needs – decoding custom types and versioned data
+
 @docs andThen, fail
+
 -}
 
 import Dict exposing (Dict)
-import Set exposing (Set)
 import Json.Decode as D exposing (Decoder)
+import Set exposing (Set)
 
 
 {-| A decoder for JSON objects that makes sure that all fields in the JSON are handled
@@ -70,12 +84,39 @@ required field decoder =
 
 
 {-| Decode the field given by the `String` parameter using the given (regular) `Decoder`. If the field is missing or the decoder fails, use the provided default value instead.
+
+If you want to not ignore field decoding failures, use `omissible`.
+
 -}
 optional : String -> Decoder a -> a -> ObjectDecoder (a -> b) -> ObjectDecoder b
 optional field decoder default =
     lift
         (\( unhandled, f ) ->
             D.maybe (D.field field decoder)
+                |> D.map (Maybe.withDefault default)
+                |> D.map (\result -> ( Set.remove field unhandled, f result ))
+        )
+
+
+{-| Decode the field given by the `String` parameter using the given (regular) `Decoder`. If the field is missing use the provided default value instead. If the field decoder fails, the object decoder will fail.
+
+If you want to ignore field decoding failures, use `optional`.
+
+-}
+omissible : String -> Decoder a -> a -> ObjectDecoder (a -> b) -> ObjectDecoder b
+omissible field decoder default =
+    lift
+        (\( unhandled, f ) ->
+            D.maybe (D.field field D.value)
+                |> D.andThen
+                    (\present ->
+                        case present of
+                            Just _ ->
+                                D.map Just (D.field field decoder)
+
+                            Nothing ->
+                                D.succeed Nothing
+                    )
                 |> D.map (Maybe.withDefault default)
                 |> D.map (\result -> ( Set.remove field unhandled, f result ))
         )
@@ -89,6 +130,7 @@ discard field =
         (\( unhandled, a ) ->
             if Set.member field unhandled then
                 D.succeed ( Set.remove field unhandled, a )
+
             else
                 D.fail ("Missing required discarded field `" ++ field ++ "`")
         )
@@ -117,6 +159,7 @@ complete (OD objectDecoder) =
             (\( unhandled, a ) ->
                 if Set.isEmpty unhandled then
                     D.succeed a
+
                 else
                     D.fail ("The following fields where not handled: " ++ String.join ", " (Set.toList unhandled))
             )
@@ -125,6 +168,7 @@ complete (OD objectDecoder) =
 {-| Turn the `ObjectDecoder` into a regular `Decoder`. Ignore if fields remain unhandled.
 
 This might be useful if you only want the check that all fields are handled to occur during development. You can use `complete` in development and change it into `discardRest` without having to change anything else.
+
 -}
 discardRest : ObjectDecoder a -> Decoder a
 discardRest (OD objectDecoder) =
@@ -135,7 +179,7 @@ discardRest (OD objectDecoder) =
 -}
 rest : Decoder a -> ObjectDecoder (Dict String a -> b) -> Decoder b
 rest aDecoder (OD objectDecoder) =
-    (objectDecoder
+    objectDecoder
         |> D.andThen
             (\( unhandled, f ) ->
                 Set.foldl
@@ -146,7 +190,6 @@ rest aDecoder (OD objectDecoder) =
                     unhandled
                     |> D.map f
             )
-    )
 
 
 {-| Finish up the `ObjectDecoder`, turning it into a regular decoder. Pass a dictionary of the unhandled fields (as `Decode.Value` values).
@@ -183,6 +226,7 @@ restValues =
             |> complete
 
 first decodes the `version` field. If it is `0`, the JSON needs to have (exactly) the fields `name` and `age`. If the version is `1`, the JSON needs the fields `fullName`, `age` and `email` instead. If the version is anything else, fail.
+
 -}
 andThen : (a -> ObjectDecoder b) -> ObjectDecoder a -> ObjectDecoder b
 andThen cont =
